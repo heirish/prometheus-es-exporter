@@ -44,7 +44,7 @@ def parse_block(block, metric=None, labels=None):
     return result
 
 
-def parse_response(response, metric=None):
+def parse_response(response, metric=None, predefined_labels = None):
     if metric is None:
         metric = []
 
@@ -57,6 +57,6 @@ def parse_response(response, metric=None):
         # Delete this field as we don't want to parse it as metric
         del response['timed_out']
 
-        result.extend(parse_block(response, metric=metric))
+        result.extend(parse_block(response, metric=metric, labels=predefined_labels))
 
     return result

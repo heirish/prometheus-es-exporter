@@ -45,17 +45,19 @@ def parse_block(block, metric=None, labels=None):
     return result
 
 
-def parse_response(response, parse_indices=False, metric=None):
+def parse_response(response, parse_indices=False, metric=None, predefined_labels=None):
     if metric is None:
         metric = []
+    if predefined_labels is None:
+        predefined_labels = OrderedDict()
 
     result = []
 
     if '_shards' not in response or not response['_shards']['failed']:
         if parse_indices:
             for key, value in response['indices'].items():
-                result.extend(parse_block(value, metric=metric, labels=OrderedDict({'index': [key]})))
+                result.extend(parse_block(value, metric=metric, labels=merge_dicts_ordered(predefined_labels, {'index': [key]})))
         else:
-            result.extend(parse_block(response['_all'], metric=metric, labels=OrderedDict({'index': ['_all']})))
+            result.extend(parse_block(response['_all'], metric=metric, labels=merge_dicts_ordered(predefined_labels, {'index': ['_all']})))
 
     return result

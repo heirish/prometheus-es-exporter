@@ -66,14 +66,17 @@ def parse_node(node, metric=None, labels=None):
     return parse_block(node, metric=metric, labels=labels)
 
 
-def parse_response(response, metric=None):
+def parse_response(response, metric=None, predefined_labels=None):
     if metric is None:
         metric = []
+
+    if predefined_labels is None:
+        predefined_labels = OrderedDict()
 
     result = []
 
     if '_nodes' not in response or not response['_nodes']['failed']:
         for key, value in response['nodes'].items():
-            result.extend(parse_node(value, metric=metric, labels=OrderedDict({'node_id': [key]})))
+            result.extend(parse_node(value, metric=metric, labels=merge_dicts_ordered(predefined_labels,{'node_id': [key]})))
 
     return result

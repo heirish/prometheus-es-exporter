@@ -1,0 +1,27 @@
+# Pin to 3.6, as prometheus-client has a memory leak in 3.7
+# https://github.com/prometheus/client_python/issues/340
+# TODO: unpin when patched prometheus-client version is released
+# centos version
+# FROM centos/jdk:8
+
+#install python 3.6
+RUN yum install -y python3.x86_64
+
+#workdir
+ENV APPS_DIR /apps/prometheus_es_exporter/
+RUN mkdir -p $APPS_DIR
+WORKDIR $APPS_DIR
+
+#install prometheus_es_exporter
+COPY setup.py $APPS_DIR
+RUN pip3 install .
+
+COPY prometheus_es_exporter/*.py $APPS_DIR/prometheus_es_exporter/
+RUN pip3 install -e .
+
+COPY LICENSE $APPS_DIR
+COPY README.md $APPS_DIR
+
+#EXPOSE 9206
+
+#ENTRYPOINT ["python", "-u", "/usr/local/bin/prometheus-es-exporter"]

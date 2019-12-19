@@ -112,11 +112,12 @@ def gauge_generator(metrics):
         yield gauge
 
 
-def run_query(es_client, name, indices, query, timeout):
+def run_query(es_client, name, indices, query, timeout, predefined_labels=None):
     try:
+        logging.info("run_query")
         response = es_client.search(index=indices, body=query, request_timeout=timeout)
 
-        metrics = parse_response(response, [name])
+        metrics = parse_response(response, [name], predefined_labels=predefined_labels)
     except Exception:
         logging.exception('Error while querying indices [%s], query [%s].', indices, query)
     else:
@@ -130,19 +131,20 @@ def collector_up_gauge(name_list, description, succeeded=True):
 
 
 class ClusterHealthCollector(object):
-    def __init__(self, es_client, timeout, level):
+    def __init__(self, es_client, timeout, level, predefined_labels=None):
         self.metric_name_list = ['es', 'cluster_health']
         self.description = 'Cluster Health'
 
         self.es_client = es_client
         self.timeout = timeout
         self.level = level
+        self.predefined_labels = predefined_labels
 
     def collect(self):
         try:
             response = self.es_client.cluster.health(level=self.level, request_timeout=self.timeout)
 
-            metrics = cluster_health_parser.parse_response(response, self.metric_name_list)
+            metrics = cluster_health_parser.parse_response(response, self.metric_name_list, self.predefined_labels)
         except ConnectionTimeout:
             logging.warn('Timeout while fetching %s (timeout %ss).', self.description, self.timeout)
             yield collector_up_gauge(self.metric_name_list, self.description, succeeded=False)
@@ -155,19 +157,20 @@ class ClusterHealthCollector(object):
 
 
 class NodesStatsCollector(object):
-    def __init__(self, es_client, timeout, metrics=None):
+    def __init__(self, es_client, timeout, metrics=None, predefined_labels=None):
         self.metric_name_list = ['es', 'nodes_stats']
         self.description = 'Nodes Stats'
 
         self.es_client = es_client
         self.timeout = timeout
         self.metrics = metrics
+        self.predefined_labels = predefined_labels
 
     def collect(self):
         try:
             response = self.es_client.nodes.stats(metric=self.metrics, request_timeout=self.timeout)
 
-            metrics = nodes_stats_parser.parse_response(response, self.metric_name_list)
+            metrics = nodes_stats_parser.parse_response(response, self.metric_name_list, self.predefined_labels)
         except ConnectionTimeout:
             logging.warn('Timeout while fetching %s (timeout %ss).', self.description, self.timeout)
             yield collector_up_gauge(self.metric_name_list, self.description, succeeded=False)
@@ -180,7 +183,7 @@ class NodesStatsCollector(object):
 
 
 class IndicesStatsCollector(object):
-    def __init__(self, es_client, timeout, parse_indices=False, metrics=None, fields=None):
+    def __init__(self, es_client, timeout, parse_indices=False, metrics=None, fields=None, predefined_labels=None):
         self.metric_name_list = ['es', 'indices_stats']
         self.description = 'Indices Stats'
 
@@ -189,12 +192,15 @@ class IndicesStatsCollector(object):
         self.parse_indices = parse_indices
         self.metrics = metrics
         self.fields = fields
+        self.predefined_labels = predefined_labels
 
     def collect(self):
         try:
-            response = self.es_client.indices.stats(metric=self.metrics, fields=self.fields, request_timeout=self.timeout)
+            response = self.es_client.indices.stats(metric=self.metrics, fields=self.fields,
+                                                    request_timeout=self.timeout)
 
-            metrics = indices_stats_parser.parse_response(response, self.parse_indices, self.metric_name_list)
+            metrics = indices_stats_parser.parse_response(response, self.parse_indices, self.metric_name_list,
+                                                          self.predefined_labels)
         except ConnectionTimeout:
             logging.warn('Timeout while fetching %s (timeout %ss).', self.description, self.timeout)
             yield collector_up_gauge(self.metric_name_list, self.description, succeeded=False)
@@ -207,7 +213,7 @@ class IndicesStatsCollector(object):
 
 
 def run_scheduler(scheduler, interval, func):
-    def scheduled_run(scheduled_time,):
+    def scheduled_run(scheduled_time, ):
         try:
             func()
         except Exception:
@@ -267,7 +273,6 @@ NODES_STATS_METRICS_OPTIONS = [
 ]
 nodes_stats_metrics_parser = partial(csv_choice_arg_parser, NODES_STATS_METRICS_OPTIONS)
 
-
 'completion,docs,fielddata,flush,get,indexing,merge,query_cache,recovery,refresh,request_cache,search,segments,store,suggest,translog,warmer'
 
 # https://www.elastic.co/guide/en/elasticsearch/reference/current/cluster-nodes-stats.html#node-indices-stats
@@ -299,6 +304,7 @@ def main():
                              'Include the scheme for non-http nodes e.g. https://es1:9200. '
                              '--ca-certs must be provided for SSL certificate verification. '
                              '(default: localhost)')
+    parser.add_argument('--cluster-name', help='cluster name, if given a value, it will be added to labels.')
     parser.add_argument('--ca-certs',
                         help='path to a CA certificate bundle. '
                              'Can be absolute, or relative to the current working directory. '
@@ -364,7 +370,13 @@ def main():
                         help='detail level to log. (default: INFO)')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='turn on verbose (DEBUG) logging. Overrides --log-level.')
+    parser.add_argument('--indices-query-disable', action='store_true',
+                        help='disable indices query.')
     args = parser.parse_args()
+
+    predefined_labels = OrderedDict()
+    if args.cluster_name is not None:
+        predefined_labels['cluster_name']=[args.cluster_name]
 
     if args.basic_user and args.basic_password is None:
         parser.error('Username provided with no password.')
@@ -411,7 +423,9 @@ def main():
 
     scheduler = None
 
-    if not args.query_disable:
+    print("query disable:", args.indices_query_disable)
+    if not args.indices_query_disable:
+        print("preparing query....")
         scheduler = sched.scheduler()
 
         config = configparser.ConfigParser()
@@ -435,20 +449,23 @@ def main():
 
         if queries:
             for name, (interval, timeout, indices, query) in queries.items():
-                func = partial(run_query, es_client, name, indices, query, timeout)
+                func = partial(run_query, es_client, name, indices, query, timeout, predefined_labels)
                 run_scheduler(scheduler, interval, func)
+            print("prepared query")
         else:
             logging.warn('No queries found in config file %s', args.config_file)
 
     if not args.cluster_health_disable:
         REGISTRY.register(ClusterHealthCollector(es_client,
                                                  args.cluster_health_timeout,
-                                                 args.cluster_health_level))
+                                                 args.cluster_health_level,
+                                                 predefined_labels=predefined_labels))
 
     if not args.nodes_stats_disable:
         REGISTRY.register(NodesStatsCollector(es_client,
                                               args.nodes_stats_timeout,
-                                              metrics=args.nodes_stats_metrics))
+                                              metrics=args.nodes_stats_metrics,
+                                              predefined_labels=predefined_labels))
 
     if not args.indices_stats_disable:
         parse_indices = args.indices_stats_mode == 'indices'
@@ -456,7 +473,8 @@ def main():
                                                 args.indices_stats_timeout,
                                                 parse_indices=parse_indices,
                                                 metrics=args.indices_stats_metrics,
-                                                fields=args.indices_stats_fields))
+                                                fields=args.indices_stats_fields,
+                                                predefined_labels=predefined_labels))
 
     logging.info('Starting server...')
     start_http_server(port)

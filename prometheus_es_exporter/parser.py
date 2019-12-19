@@ -76,9 +76,12 @@ def parse_agg(agg_key, agg, metric=None, labels=None):
     return result
 
 
-def parse_response(response, metric=None):
+def parse_response(response, metric=None, predefined_labels=None):
     if metric is None:
         metric = []
+
+    if predefined_labels is None:
+        predefined_labels = OrderedDict()
 
     result = []
 
@@ -93,6 +96,6 @@ def parse_response(response, metric=None):
 
         if 'aggregations' in response.keys():
             for key, value in response['aggregations'].items():
-                result.extend(parse_agg(key, value, metric=metric + [key]))
+                result.extend(parse_agg(key, value, metric=metric + [key]), predefined_labels)
 
     return result
